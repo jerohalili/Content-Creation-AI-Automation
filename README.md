@@ -1,99 +1,413 @@
-# 🤖 Local-AI Social Media Factory (v5)
+# Local-AI Social Media Factory (v5)
 
-A powerful, **zero-API-cost** automation engine for marketing content. This system runs entirely on your hardware using local AI models. It combines a local Llama 3.1 language model and ComfyUI for image generation, orchestrated by n8n. A Telegram-based **Human-in-the-Loop** approval step ensures each post meets your quality standards.
+![Project Banner](./assets/banner.png)
 
-## ⚡ The "Zero-Cost" Architecture
+## Short Introduction
 
-This stack avoids expensive cloud credits by using local compute (an economic strategy to cut costs). It includes:  
+Local-AI Social Media Factory is a **zero-API-cost marketing automation system** that generates social media content using fully local AI models.
 
-- **Copywriting:** Local Llama 3.1 (8B Q8) model for text. It runs via the AnythingLLM API for fast, on-prem inference (no external API calls).  
-- **Visuals:** ComfyUI with **Z Image Turbo** (a lightning-fast Stable Diffusion XL engine) to create images. All models and prompts are stored locally.  
-- **Orchestration:** n8n (self-hosted) coordinates the workflow. This containerized automation tool lets you chain steps without coding.  
-- **Gatekeeping:** A Telegram Bot (Human-in-the-Loop) that sends draft posts for one-tap approvals. This adds a human strategy layer, blending automation with manual review for safety and compliance.
+Instead of paying recurring cloud API fees, this system runs entirely on local hardware using:
 
-By keeping everything local, you save money and maintain full control. This approach also boosts data privacy and ensures compliance with local marketing and advertising regulations (Philippine BIR, SSS, PhilHealth contexts).
+- Local LLMs for copywriting  
+- Local image generation models  
+- Workflow automation tools  
+- Human approval systems before publishing  
 
-## 🛠️ Hardware Requirements
+The project was built to solve a real business problem:
 
-Running these AI models together needs a beefy setup (resources roughly translate to Philippine peso cost savings vs cloud):  
+**Small businesses and marketing teams often cannot afford expensive AI subscriptions.**
 
-- **GPU:** NVIDIA RTX 3060 (12GB VRAM) or better. A dedicated GPU accelerates image generation (Stable Diffusion) and LLM inference.  
-- **RAM:** 16 GB or more system RAM. Each model and n8n workflows run in memory.  
-- **Storage:** ~20 GB free (for model weights and images). Llama 3.1 and SDXL models each take several GB.  
+This system reduces recurring operational expenses by replacing cloud APIs with local infrastructure.
 
-These specs ensure smooth operation. If you use smaller models or lower precision (e.g., 4-bit GGUF), you could get away with less GPU memory.
+**Core Philosophy:**  
+*Own the infrastructure. Reduce recurring costs. Scale content production.*
 
-## 🚀 Installation & Setup
+---
 
-Follow these steps to deploy the system on your machine:
+## Project Goal
 
-1. **Local AI Environment:**  
-   - **AnythingLLM:** Install and run AnythingLLM on your PC. In settings, enable the API and create a workspace named `content-planner`. This will host Llama 3.1 locally.  
-   - **ComfyUI:** Download and run ComfyUI with the `--listen` flag (`python main.py --listen`). This makes ComfyUI listen on port 8188 (e.g. `http://localhost:8188`). It allows n8n to send image generation requests.  
+Create an automated content pipeline that can:
 
-2. **Deployment:**  
-   ```bash
-   git clone https://github.com/your-username/Local-AI-Content-Factory.git
-   cd Local-AI-Content-Factory/docker
-   docker-compose up -d
+- Generate social media captions  
+- Generate marketing images  
+- Send content for approval  
+- Publish content automatically  
 
-## n8n Deployment
+while maintaining:
 
-This starts n8n in Docker. Docker is a virtualization strategy that isolates the workflow engine. Using `docker-compose` brings up the container quickly. Make sure Docker is installed and running on your system.
+- Lower operational costs  
+- Better privacy  
+- More customization  
+- Higher scalability  
 
-## n8n Configuration
+---
 
-### Import Workflow
-Open the n8n web interface, usually at `http://localhost:5678`. Use the top-right menu to **Import from File** and load `workflows/content-generator-v5.json`. This contains the automation blueprint.
+## Technologies Used
 
-### Credentials
-In the imported workflow, update the required keys and IDs:
+### AI Copywriting
+- Llama 3.1 (8B Q8)
+- AnythingLLM API
+- Local inference setup
 
-- **AnythingLLM API Key:** Replace `YOUR_ANYTHINGLLM_API_KEY` with your key from the AnythingLLM workspace.
-- **Telegram Bot:** Replace `YOUR_TELEGRAM_TOKEN` (bot token) and `YOUR_CHAT_ID` (your Telegram user or group ID). This configures the bot for human approvals.
-- **Social Media:** Insert your `YOUR_FB_PAGE_ID`, `YOUR_IG_USER_ID`, and the respective Access Tokens. These enable auto-posting to Facebook and Instagram via their APIs.
+---
 
-After configuring, run a test trigger in n8n to ensure everything connects. The workflow will now generate a post and image draft, then send it to your Telegram for approval.
+### AI Image Generation
+- ComfyUI
+- Z Image Turbo
+- Stable Diffusion XL models
 
-## 🧠 The "Mara" Persona & Prompt Logic
+---
 
-The `prompts/` folder defines a character named **Mara**, giving the AI a consistent marketing voice. The four-layer prompting engine applies marketing strategy and psychology to content:
+### Workflow Automation
+- n8n
+- Docker
+- Docker Compose
 
-- **Sensory Hooks:** Posts begin with a vivid sensory cue, such as a sound, feeling, or scene, to grab attention. This uses basic psychology: humans respond strongly to sensory details.
-- **Compliance-First:** Every post weaves in local regulatory context, like mentions of BIR, SSS, or PhilHealth compliance, to ensure trust and legality. Addressing laws directly speaks to consumers’ sense of security and builds credibility.
-- **Visual Consistency:** Image prompts avoid generic “stock photo” looks. Instead, they use detailed, cinematic descriptions tailored to the local market. This strategy aligns visuals with copy tone and demographics, improving overall engagement.
-- **No AI Fluff:** The chain of prompts forces the model to skip generic filler. Each step refines the content toward specific goals, a strategic layer that saves time and boosts conversion.
+---
 
-Together, these tactics create marketing posts that sound local, feel authentic, and follow advertising standards. The `prompts/` folder includes Markdown templates and examples showing how each layer enhances the output.
+### Communication Layer
+- Telegram Bot API
 
-## 🔧 Troubleshooting & Tips
+---
 
-If you run into issues, check these common scenarios:
+### Backend Utilities
+- JavaScript
+- JSON workflow configuration
 
-### Connection Refused
-If n8n is in Docker, `localhost` may not work. Use `http://host.docker.internal:3001` (or whatever port your n8n tunnel is on) instead of `localhost`. This uses Docker’s internal host alias to reach your machine.
+---
 
-### Telegram Buttons Fail
-Telegram webhooks need a public callback URL. Ensure your n8n instance is exposed via a tool like Ngrok or Cloudflare Tunnel, so Telegram can reach it. This is a networking strategy that forwards requests from the internet to your local service.
+## Features
 
-### GPU Out of Memory
-If Llama 3.1 or ComfyUI uses too much GPU memory, lower the model precision. For example, use a 4-bit GGUF Llama model or run AnythingLLM in CPU mode using system RAM. This is a trade-off between precision and memory, which is a common engineering strategy.
+### AI Caption Generation
+Automatically generates:
 
-### Stripping Preamble
-Llama 3.1 sometimes starts replies with “Here is your post: ...”. The `scripts/parse-utils.js` included in this repo automatically removes those phrases. If you customize the model or prompts, ensure similar cleanup so outputs stay neat.
+- Social media posts  
+- Marketing captions  
+- Promotional content  
 
-Each tip above addresses a specific technical snag. They combine practical strategies, such as lowering quality for memory savings, with knowledge of the tools’ quirks. Read error messages carefully and adjust settings as needed.
+using local Llama models.
 
-## 📂 Project Structure
+---
 
-- `workflows/` – n8n workflow definitions (JSON). Contains automation blueprints and logic.
-- `prompts/` – Mara Persona and prompt templates. Markdown files defining prompts and content guidelines.
-- `scripts/` – Utility scripts (JavaScript). Includes helpers for stripping extra text and parsing JSON.
-- `docker/` – Docker Compose files. Configuration for launching n8n and related services in containers.
-- `README.md` – This documentation. Use it to set up and understand the project.
+### AI Image Generation
+Creates marketing visuals using:
 
-The structure is organized so you can easily locate the automation flows in `workflows/`, customize prompts in `prompts/`, and tweak deployment in `docker/`.
+- Stable Diffusion workflows  
+- Custom prompts  
+- Brand-specific visuals  
 
-## 📜 License
+---
 
-This project is open-source under the MIT License. See the `LICENSE` file for details. You are free to use, modify, and distribute the code as permitted by MIT terms.
+### Human-in-the-Loop Approval
+Before publishing:
+
+- Telegram sends draft content  
+- User reviews content  
+- One-tap approval system  
+
+This reduces automation risks.
+
+---
+
+### Automatic Publishing
+Can publish directly to:
+
+- Facebook  
+- Instagram  
+
+through connected APIs.
+
+---
+
+### Cost Optimization
+This system avoids:
+
+- OpenAI API costs  
+- Midjourney costs  
+- SaaS automation costs  
+
+This improves long-term ROI.
+
+---
+
+## Hardware Requirements
+
+### Minimum
+- RTX 3060 (12GB VRAM)
+- 16GB RAM
+- 20GB Storage
+
+---
+
+### Recommended
+- RTX 4070+
+- 32GB RAM
+- Fast NVMe SSD
+
+---
+
+## Development Process (How It Was Built and Why)
+
+---
+
+### Why I Built It
+
+Most AI automation businesses fail because recurring API costs destroy profit margins.
+
+Example:
+
+- OpenAI API costs scale with usage  
+- Image APIs charge per generation  
+- Automation tools charge monthly subscriptions  
+
+For agencies handling many clients, these costs compound quickly.
+
+I built this system using an economic strategy:
+
+**High upfront hardware cost → lower long-term operational cost**
+
+This follows SaaS margin optimization principles.
+
+---
+
+### Step 1: Identifying Bottlenecks
+
+Manual workflow problems:
+
+- Writing captions manually  
+- Designing graphics manually  
+- Publishing manually  
+- Managing approvals manually  
+
+These tasks consume time.
+
+---
+
+### Step 2: Replacing Manual Work
+
+I automated:
+
+Content writing → LLMs  
+Image creation → Stable Diffusion  
+Publishing → n8n  
+Approval → Telegram
+
+---
+
+### Step 3: Building Safeguards
+
+Fully automated posting can create legal and branding risks.
+
+To reduce this:
+
+- Human approval layer added  
+- Compliance-focused prompts created  
+- Output filtering implemented  
+
+---
+
+### Step 4: Deployment Optimization
+
+Used Docker because it improves:
+
+- Portability  
+- Reproducibility  
+- Easier deployment  
+- Environment consistency  
+
+---
+
+## The "Mara" Prompt System
+
+This project includes a custom marketing persona called **Mara**.
+
+Mara improves output quality using:
+
+### Sensory Hooks
+Improves engagement by grabbing attention quickly.
+
+---
+
+### Compliance Messaging
+References:
+
+- BIR
+- SSS
+- PhilHealth
+
+This increases trust in local markets.
+
+---
+
+### Visual Consistency
+Prevents generic AI-generated visuals.
+
+---
+
+### No AI Fluff
+Removes robotic-sounding content.
+
+---
+
+## What I Learned
+
+### AI Infrastructure
+- Local LLM deployment  
+- Stable Diffusion workflows  
+- GPU optimization  
+
+---
+
+### Automation Engineering
+- n8n orchestration  
+- API integrations  
+- Workflow scaling  
+
+---
+
+### Business Strategy
+- Cost reduction models  
+- Automation ROI  
+- Agency scaling economics  
+
+---
+
+### Risk Management
+- Human approval systems  
+- Compliance considerations  
+- Platform restrictions  
+
+---
+
+## Troubleshooting
+
+### Docker Connection Issues
+Use:
+
+```bash
+host.docker.internal
+```
+
+instead of localhost.
+
+---
+
+### Telegram Issues
+Use:
+
+- Ngrok
+- Cloudflare Tunnel
+
+for webhook support.
+
+---
+
+### GPU Memory Problems
+Solutions:
+
+- Lower model precision  
+- Use smaller models  
+- Offload workloads to RAM  
+
+---
+
+### Output Cleanup Issues
+Use:
+
+```bash
+scripts/parse-utils.js
+```
+
+to remove unwanted AI responses.
+
+---
+
+## How to Improve It
+
+### Short-Term
+- Better UI dashboard  
+- More social platform integrations  
+- Better analytics tracking  
+
+---
+
+### Medium-Term
+- Multi-client support  
+- CRM integration  
+- Content scheduling dashboard  
+
+---
+
+### Long-Term
+- SaaS product version  
+- White-label agency platform  
+- Multi-language support  
+
+---
+
+## How to Run the Project
+
+### Clone Repository
+```bash
+git clone https://github.com/jerohalili/Content-Creation-AI-Automation.git
+```
+
+### Enter Directory
+```bash
+cd Content-Creation-AI-Automation
+```
+
+---
+
+### Start Docker Services
+```bash
+docker-compose up -d
+```
+
+---
+
+### Run ComfyUI
+```bash
+python main.py --listen
+```
+
+---
+
+### Open n8n
+```bash
+http://localhost:5678
+```
+
+Import:
+
+```bash
+workflows/content-generator-v5.json
+```
+
+---
+
+## Project Structure
+
+```bash
+workflows/
+prompts/
+scripts/
+docker/
+README.md
+```
+
+---
+
+## Creator
+
+**Jerohalili**
+
+- GitHub: https://github.com/jerohalili  
+- LinkedIn: www.linkedin.com/in/jero-halili-bb385b295  
+- Email: jerobusiness20@gmail.com  
+
+---
+
+## License
+
+MIT License
