@@ -366,10 +366,8 @@ docker-compose up -d
 
 ---
 
-### Run ComfyUI
-```bash
-python main.py --listen
-```
+### Run ComfyUI App
+Link API of custom Workflow to n8n
 
 ---
 
@@ -385,6 +383,9 @@ workflows/content-generator-v5.json
 ```
 
 ---
+
+### Run Anything LLM app
+Link API of local LLM to n8n
 
 ## Project Structure
 
