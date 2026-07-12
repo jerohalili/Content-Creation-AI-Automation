@@ -1,0 +1,1088 @@
+{
+  "name": "Guest – Guest FB Content Generator v6 [LLaMA3.1]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## JeroPC Local Setup — v6 (LLaMA 3.1 Optimized)\n\n**AnythingLLM**\n- Base URL: http://localhost:3001\n- AuthAPI Key: YOUR_ANYTHINGLLM_API_KEY\n- Endpoint: /api/v1/workspace/content-planner/chat\n- Model: Meta-Llama-3.1-8B-Instruct-Q8_0\n\n**ComfyUI**\n- API URL: http://localhost:8188\n- Image model: z_image_turbo_bf16.safetensors\n\n**Facebook Page**\n- Page ID: YOUR_FB_PAGE_ID\n- Page Access Token: YOUR_FB_PAGE_ACCESS_TOKEN\n\n**Telegram**\n- Bot HTTP API: YOUR_TELEGRAM_BOT_TOKEN\n- User Chat ID: YOUR_TELEGRAM_CHAT_ID",
+        "height": 552,
+        "width": 660
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2480,
+        2000
+      ],
+      "id": "9616afad-2c3a-4f74-a918-48a261522ae2",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-generate",
+              "leftValue": "={{ $json.isGenerate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "43adbd65-7a5a-4a33-b3d7-ed774ca9e991",
+      "name": "Is /generate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        2832
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-callback",
+              "leftValue": "={{ $json.isCallback }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c94d0094-478d-48a1-8d6f-5414941ae0e5",
+      "name": "Is Callback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        3152
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v5: Parse Image Prompt - adapted for Meta-Llama-3.1-8B-Instruct\n// LLaMA 3.1 does not emit <think> blocks; strip is kept as a harmless safety net.\n// LLaMA 3.1 may prefix with \"Here is the prompt:\" or append \"Note: I avoided...\"\n// Both are stripped below.\nconst response = $input.first().json;\nconst raw = (response.textResponse || response.text || response.message || '').trim();\n\nif (!raw) throw new Error('Empty image prompt response from AnythingLLM / LLaMA 3.1');\n\n// Strip Qwen3 think blocks (no-op for LLaMA, kept for safety)\nlet stripped = raw.replace(/<think>[\\s\\S]*?<\\/think>/gi, '').trim();\n\n// Strip LLaMA 3.1 preamble patterns\nstripped = stripped\n  .replace(/^(here is the (image )?prompt[:\\-]?\\s*)/i, '')\n  .replace(/^(image prompt:|prompt:|sure[!,]?\\s*here[^:]*:\\s*)/i, '')\n  .replace(/```[\\s\\S]*?```/g, '')\n  .trim();\n\n// Strip trailing meta-commentary LLaMA may append after the prompt ends\nconst noteIdx = stripped.search(/\\n\\s*(note:|this prompt|i (have |)avoided|as (instructed|requested)|please note)/i);\nif (noteIdx > 0) {\n  stripped = stripped.substring(0, noteIdx).trim();\n}\n\nconst imagePrompt = stripped;\nif (!imagePrompt) throw new Error('Image prompt was empty after all cleanup');\n\nreturn [{\n  json: {\n    chatId: $('Parse Content Response').first().json.chatId,\n    topic: $('Parse Content Response').first().json.topic,\n    caption: $('Parse Content Response').first().json.caption,\n    hashtags: $('Parse Content Response').first().json.hashtags,\n    visualStyle: $('Inject Randomness').first().json.visualStyle,\n    imagePrompt\n  }\n}];\n"
+      },
+      "id": "575b8250-1b60-44c2-8226-3e9082ba2cbf",
+      "name": "Parse Image Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3776,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8188/view?filename={{ $json.filename }}&subfolder={{ $json.subfolder }}&type={{ $json.imageType }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "91b7d365-b02b-4ead-a2f4-190c30d46de7",
+      "name": "Download Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4016,
+        2880
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v4: Save session AND update topic history for anti-repetition\nconst staticData = $getWorkflowStaticData('global');\nconst chatId = $('Parse Update').first().json.chatId;\nconst topic = $('Parse Content Response').first().json.topic;\nconst caption = $('Parse Content Response').first().json.caption;\nconst hashtags = $('Parse Content Response').first().json.hashtags;\nconst filename = $('Extract Image Filename').first().json.filename;\n\n// Save session for approval flow\nstaticData[chatId] = { chatId, topic, caption, hashtags, filename };\n\n// Track topic history (last 10 topics, persists across workflow runs)\nlet history = staticData.topicHistory || [];\nhistory.unshift(topic);\nif (history.length > 10) history = history.slice(0, 10);\nstaticData.topicHistory = history;\n\n// Track format cycle position (persists across runs)\nlet cyclePos = staticData.formatCyclePos || 0;\nstaticData.formatCyclePos = cyclePos + 1;\n\nreturn [{\n  json: {\n    chatId, topic, caption, hashtags, filename,\n    telegramCaption: \"<b>📋 TOPIC:</b> \" + topic + \"\\n\\n<b>📝 CAPTION:</b>\\n\" + caption + \"\\n\\n<b>🏷️ HASHTAGS:</b>\\n\" + hashtags\n  },\n  binary: $input.first().binary\n}];"
+      },
+      "id": "54ba6432-4650-44bc-b289-b69eedb86325",
+      "name": "Save Session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        2880
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const callbackData = $json.callbackData || '';\nconst chatId = $json.chatId;\nconst callbackQueryId = $json.callbackQueryId;\nconst parts = callbackData.split('_');\nconst action = parts[0];\n\nif (!['approve', 'reject'].includes(action)) {\n  throw new Error('Unknown callback: ' + callbackData);\n}\n\nreturn [{\n  json: { action, chatId, callbackQueryId, isApprove: action === 'approve' }\n}];"
+      },
+      "id": "a7049450-a837-487e-96e3-681cff30e06a",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2896,
+        3056
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/answerCallbackQuery",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"callback_query_id\": \"{{ $json.callbackQueryId }}\",\n  \"text\": \"{{ $json.isApprove ? '⚙️ Posting to Facebook & Instagram...' : '🗑️ Content rejected.' }}\",\n  \"show_alert\": false\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "7240c4c6-b37b-43da-be0b-e5301f0a1d86",
+      "name": "Answer Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        3056
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst chatId = $('Parse Update').first().json.chatId;\nconst saved = staticData[chatId];\n\nif (!saved) {\n  throw new Error('Could not find saved session for Chat ID: ' + chatId);\n}\n\nreturn [{\n  json: {\n    chatId: saved.chatId,\n    topic: saved.topic,\n    caption: saved.caption,\n    hashtags: saved.hashtags,\n    filename: saved.filename,\n    subfolder: '',\n    imageType: 'output'\n  }\n}];"
+      },
+      "id": "17e3a546-ca40-4a62-9ff9-7597651f916d",
+      "name": "Load Session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        3056
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8188/view?filename={{ $json.filename }}&subfolder={{ $json.subfolder }}&type={{ $json.imageType }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "b670f5be-149f-4136-9b82-b6dd52e1b668",
+      "name": "Re-download for Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3808,
+        3056
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_FB_PAGE_ID/photos",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_FB_PAGE_ACCESS_TOKEN"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $('Load Session').first().json.caption + '\\n\\n' + $('Load Session').first().json.hashtags }}"
+            },
+            {
+              "name": "published",
+              "value": "false"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "source",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "6a7054e3-05bd-4e96-8259-d3d4e7844765",
+      "name": "Facebook – Upload Photo (Unpublished)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4032,
+        3056
+      ],
+      "notesInFlow": true,
+      "notes": "Step 1 of 2: uploads photo unpublished so we control post creation explicitly in the next node, avoiding Facebook auto-bundling multiple photo uploads into one grouped post."
+    },
+    {
+      "parameters": {
+        "jsCode": "// UPDATED v5: Reads composite post ID from the explicit /feed publish call\n// (Step 2 of the unpublished-photo + feed pattern), instead of the old\n// single /photos?published=true call whose response Facebook could\n// silently fold into a prior grouped post.\nconst fb = $input.first().json;\nconst session = $('Load Session').first().json;\nconst photoUpload = $('Facebook – Upload Photo (Unpublished)').first().json;\nconst compositeId = fb.id || fb.post_id || '';\nconst fbPhotoId = photoUpload.id || '';\nconst pageId = 'YOUR_FB_PAGE_ID';\n\nlet postUrl = `https://www.facebook.com/${pageId}`;\nif (compositeId.includes('_')) {\n  postUrl = `https://www.facebook.com/permalink.php?story_fbid=${compositeId.split('_')[1]}&id=${pageId}`;\n}\n\nreturn [{\n  json: {\n    chatId: session.chatId,\n    topic: session.topic,\n    caption: session.caption,\n    hashtags: session.hashtags,\n    fbPostUrl: postUrl,\n    fbPostId: compositeId,\n    fbPhotoId\n  }\n}];"
+      },
+      "id": "3fb7406f-07db-4d3c-acfd-324840263b67",
+      "name": "Extract FB Post URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        3264
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $json.chatId }}\",\n  \"text\": \"✅ <b>Posted Successfully!</b>\\n\\n<b>📋 Topic:</b> {{ $json.topic }}\\n\\n<b>📘 Facebook:</b>\\n<a href=\\\"{{ $json.fbPostUrl }}\\\">View FB Post</a>\",\n  \"parse_mode\": \"HTML\",\n  \"disable_web_page_preview\": false\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "c284c78a-7454-4057-b896-92c5ce33c97a",
+      "name": "Telegram – Confirm Posted",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4464,
+        3264
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Parse Callback').first().json.chatId }}\",\n  \"text\": \"❌ <b>Content Rejected</b>\\n\\nNot posted to Facebook or Instagram. Send /generate to try again.\",\n  \"parse_mode\": \"HTML\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "400b4580-6282-40fb-b920-5a62cc3edd68",
+      "name": "Telegram – Send Rejection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        3264
+      ]
+    },
+    {
+      "parameters": {
+        "updates": [
+          "callback_query",
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        2704,
+        2800
+      ],
+      "id": "c9c2d06c-6c64-4e50-98e1-1dde08abaee0",
+      "name": "Telegram Trigger",
+      "webhookId": "911dab8d-c291-4e05-8bf9-c55dde4b5571",
+      "credentials": {
+        "telegramApi": {
+          "id": "FunPXSEBY3c6YSbV",
+          "name": "Telegram account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// v4: Extended to capture optional topic hint after /generate command\n// Usage: /generate            → fully random\n// Usage: /generate sss 2025   → hint steers content angle\nconst body = $input.first().json.body || $input.first().json;\n\nlet updateType = 'unknown';\nlet chatId = 'YOUR_TELEGRAM_CHAT_ID';\nlet messageText = '';\nlet callbackData = '';\nlet callbackQueryId = '';\nlet messageId = '';\nlet username = '';\nlet topicHint = '';\n\nif (body.message) {\n  updateType = 'message';\n  chatId = String(body.message.chat.id);\n  messageText = body.message.text || '';\n  messageId = String(body.message.message_id || '');\n  username = body.message.from?.username || body.message.from?.first_name || 'User';\n} else if (body.callback_query) {\n  updateType = 'callback_query';\n  chatId = String(body.callback_query.message.chat.id);\n  callbackData = body.callback_query.data || '';\n  callbackQueryId = String(body.callback_query.id);\n  messageId = String(body.callback_query.message.message_id || '');\n  username = body.callback_query.from?.username || body.callback_query.from?.first_name || 'User';\n}\n\nconst isGenerate = updateType === 'message' && messageText.trim().startsWith('/generate');\n\n// Extract optional hint text after /generate (e.g. \"/generate BIR compliance\" → \"BIR compliance\")\nif (isGenerate && messageText.trim().length > 9) {\n  topicHint = messageText.trim().slice(9).trim();\n}\n\nreturn [{\n  json: {\n    updateType, chatId, messageText, callbackData, callbackQueryId, messageId, username,\n    isGenerate,\n    isCallback: updateType === 'callback_query',\n    topicHint\n  }\n}];"
+      },
+      "id": "8c5fd955-bff1-408a-8e87-433faf6b8cae",
+      "name": "Parse Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        2800
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $json.chatId }}\",\n  \"text\": \"⚙️ <b>Generating content...</b>\\n🎲 Angle: {{ $json.angle }}\\n🎨 Style: {{ $json.visualStyle }}\",\n  \"parse_mode\": \"HTML\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "3008f104-60b7-4397-b580-1dac68570846",
+      "name": "generating... reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2912,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Parse Callback').first().json.chatId }}\",\n  \"text\": \"type /generate to try again.\",\n  \"parse_mode\": \"HTML\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "2fff6e34-0d07-4357-8308-13ae1f468a95",
+      "name": "/generate reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2896,
+        3264
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-approve",
+              "leftValue": "={{ $('Parse Callback').item.json.isApprove }}",
+              "rightValue": "={{ 'approve_' + $json.chatId }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3c326796-4c85-4ada-8e29-8ab5f3ff2b42",
+      "name": "Is Approve?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3344,
+        3056
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendPhoto",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $json.chatId }}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $json.telegramCaption }}"
+            },
+            {
+              "name": "parse_mode",
+              "value": "HTML"
+            },
+            {
+              "name": "reply_markup",
+              "value": "={{ JSON.stringify({ inline_keyboard: [[ { text: '✅ Approve', callback_data: 'approve_' + $json.chatId }, { text: '❌ Reject', callback_data: 'reject_' + $json.chatId } ]] }) }}"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "photo",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ec54d524-fc68-416e-a480-fb0eaf58a974",
+      "name": "Telegram – Send Photo + Buttons",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4464,
+        2880
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v5 UPDATED: Inject Randomness — LLaMA 3.1 Optimised\n// NEW vs v4:\n//   narrativePOV     — locks writing perspective per run\n//   sensoryHook      — mandates a specific sense in the caption opener\n//   structureVariant — explicit structural scaffold injected into prompt\n//   forbiddenPhrases — rotating blacklist to prevent cliche drift\n//   metaphorSeed     — unexpected metaphor domain for originality\n// ============================================================\nconst staticData = $getWorkflowStaticData('global');\nconst parseUpdate = $('Parse Update').first().json;\n\nconst angles = [\n  'the real cost of a bad hire, and how to avoid it',\n  'why speed-to-hire wins the best candidates',\n  'myth: recruitment agencies just forward resumes',\n  'thorough candidate screening and background checks',\n  'scaling your team fast without building an in-house HR department',\n  'reducing turnover by hiring for the right fit',\n  'flexible staffing for seasonal or project-based needs',\n  'end-to-end onboarding support for new hires',\n  'connecting skilled Filipino talent with the right companies',\n  'employer branding that attracts stronger applicants'\n];\n\nconst formatCycle = [\n  { type: 'direct-sales', desc: 'Lead with a high-energy benefit. Focus on \"Say goodbye to endless hiring headaches!\" style. List 4 key staffing benefits. End with a strong CTA.' },\n  { type: 'problem-agitation', desc: 'Start with a common hiring mistake or costly turnover fear. Immediately offer Guest as the trusted staffing partner. Use punchy, short sentences.' },\n  { type: 'story', desc: 'Open with a tight 2-sentence scene (specific location, named detail, sensory anchor). Second paragraph reveals the conflict. Third resolves it with Guest. No moral summary at the end.' },\n  { type: 'statistic', desc: 'Lead with ONE unexpected Philippine hiring or workforce number (not \"did you know\"). Unpack WHY it matters in 2 sentences. Connect to the feature focus. Close with a single punchy CTA line.' },\n  { type: 'question', desc: 'Open mid-thought as if the reader just said something aloud. Reflect their exact frustration back in 1 sentence. Answer in 3 short sentences. Do not end with a question.' },\n  { type: 'myth-bust', desc: 'State the myth in bold as a direct quote someone might actually say. Bust it with one sharp counter-fact. Follow with two concrete Guest proof points. End with a reframe, not a pitch.' },\n  { type: 'numbered-tips', desc: 'Give exactly 3 tips. Each tip = one action sentence + one Guest sentence. No preamble. No closing summary. Tips must escalate in impact (small to big).' },\n  { type: 'comparison', desc: 'Write alternating short lines: Before: scenario / After: scenario, three pairs total. Then one closing line naming Guest and the specific outcome. No paragraph prose.' }\n];\n\nconst tones = [\n  'professional yet warm - like a trusted colleague, not a sales rep',\n  'conversational and direct - short sentences, zero corporate jargon',\n  'urgent but empathetic - acknowledge the real stress, then offer relief',\n  'educational and helpful - teach one thing clearly, no fluff',\n  'confident and understated - let the facts do the work, no hype words'\n];\n\nconst featureGroups = [\n  'Candidate Sourcing, Screening, and Background Verification',\n  'Fast Placement and Reduced Time-to-Hire',\n  'End-to-end Recruitment Process Outsourcing (RPO)',\n  'Onboarding and Documentation Support for New Hires',\n  'Flexible Staffing for Seasonal, Project-based, and Full-time Roles',\n  'Employer Branding and Talent Pipeline Building',\n  'Dedicated Account Management for Client Companies'\n];\n\n// v5 NEW: Narrative POV lock\nconst narrativePOVs = [\n  '1st person singular (I / my) - write as a Guest recruiter speaking directly',\n  '2nd person (you / your) - address the reader as the decision-maker',\n  '3rd person close (she/he/they) - follow a specific unnamed Filipino professional',\n  '1st person plural (we) - speak as a business owner alongside their team',\n  'Omniscient narrator - observe the scene from outside, reportage style'\n];\n\n// v5 NEW: Sensory hook - forces a non-visual sense in the opener\nconst sensoryHooks = [\n  'sound - open with something the reader hears (keyboard clicks, a phone alarm, a colleague calling out)',\n  'touch - open with a physical sensation (the weight of paper, a screen tap, cold office air)',\n  'smell - open with an olfactory detail (coffee, printed paper, rain outside the office window)',\n  'time-pressure - open with a clock or deadline sensation (the weight of a Friday afternoon cutoff)',\n  'visual-detail - open with a hyper-specific visual (the exact color of a spreadsheet error cell, a blinking cursor)'\n];\n\n// v5 NEW: Structure variant - explicit scaffold for LLaMA 3.1\nconst structureVariants = [\n  'HOOK (1 sentence) > CONFLICT (2 sentences) > SOLUTION (2 sentences) > CTA (1 sentence)',\n  'SCENE (2 sentences) > PIVOT (That changed when...) > BENEFIT (2 sentences) > CTA (1 sentence)',\n  'BOLD CLAIM (1 sentence) > EVIDENCE (2 sentences) > IMPLICATION (1 sentence) > CTA (1 sentence)',\n  'QUESTION (1 sentence) > EMPATHY (1 sentence) > ANSWER (2 sentences) > CTA (1 sentence)',\n  'BEFORE (2 sentences) > AFTER (2 sentences) > PROOF POINT (1 sentence) > CTA (1 sentence)',\n  'TIP1 > TIP2 > TIP3 (each = 1 action sentence + 1 Guest sentence) > 1 closing line'\n];\n\n// v5 NEW: Rotating forbidden phrase blacklist\nconst forbiddenPhraseSets = [\n  ['game-changer', 'seamless', 'robust', 'leverage', 'streamline', 'in todays fast-paced', 'at the end of the day'],\n  ['transform', 'revolutionize', 'cutting-edge', 'next-level', 'empower', 'synergy', 'pain points'],\n  ['say goodbye to', 'imagine a world', 'its time to', 'take your business to', 'unlock the power', 'the future of'],\n  ['hassle-free', 'all-in-one solution', 'state-of-the-art', 'best-in-class', 'world-class', 'one-stop shop'],\n  ['Are you tired of', 'Did you know', 'Introducing', 'We are excited', 'We are proud', 'Dont miss out']\n];\n\n// v5 NEW: Metaphor seed - unexpected domain for comparisons\nconst metaphorSeeds = [\n  'cooking and kitchen prep',\n  'architecture and construction',\n  'navigation and wayfinding',\n  'sports and athletic training',\n  'medical diagnosis and treatment',\n  'weather and forecasting',\n  'music composition and rehearsal',\n  'photography and darkroom development'\n];\n\nconst subjectPool = [\n  'a Filipino job applicant shaking hands with an HR interviewer across a desk, warm smile',\n  'a Filipino recruiter\\'s hands reviewing a stack of resumes at her desk, pen in hand',\n  'two Filipino coworkers celebrating a new hire\\'s first day, coffee cups raised',\n  'a Filipino HR manager laughing mid-conversation with a candidate, both standing, no screens visible',\n  'a Filipino business owner welcoming a new employee at the office entrance, hand extended',\n  'a close-up of a Filipino jobseeker\\'s face, relieved and hopeful expression after an interview',\n  'a Filipino call center applicant walking confidently into a modern office lobby',\n  'a Filipino mother at home reading a job offer email on her phone, smiling',\n  'a Filipino delivery rider checking a new job posting on his phone during a break',\n  'a Filipino security guard being briefed by an HR staff member on his first day',\n  'a Filipino warehouse worker being handed a company ID by an HR officer',\n  'a Filipino sari-sari store owner reviewing a part-time staff application at a small counter',\n  'a flat-lay overhead shot of a resume, pen, coffee cup and a company ID lanyard on a wooden table, no person visible',\n  'a neatly organized stack of resumes and a folder labeled shortlist on a desk, sunlight raking across',\n  'a Filipino new hire stepping into an office building at golden hour, bag on shoulder, first-day energy',\n  'a group of Filipino factory workers listening to an orientation briefing from an HR staff member',\n  'a Filipino teacher applicant checking an interview confirmation text while seated in a waiting area',\n  'a close-up of a hand signing an employment contract, pen still moving',\n  'a Filipino family celebrating a job offer together at home, phone showing the good news',\n  'a Filipino HR staff member walking a new hire down a hallway for an office tour'\n];\n\nconst environmentPool = [\n  'a BGC high-rise corporate office lobby with floor-to-ceiling windows',\n  'a Makati co-working space with exposed concrete and greenery',\n  'a provincial BPO floor with rows of workstations, mostly empty at shift change',\n  'a modest home kitchen with laundry hanging in the background',\n  'a small sari-sari store storefront with hanging snack packets',\n  'a factory or warehouse loading dock at dusk',\n  'a busy Manila street at golden hour, jeepneys and pedestrians in soft focus',\n  'a public market alley with vendors and umbrellas in the background',\n  'a modest classroom after school hours, chairs stacked',\n  'a covered tricycle terminal with waiting commuters',\n  'a rooftop or building exit at end of shift, city skyline behind',\n  'a small business back office with filing cabinets and a printer',\n  'a narrow provincial office with fluorescent lights and metal desks',\n  'a cafe table with two cups of coffee and no laptops visible',\n  'a family living room with modest furniture and warm lamp light'\n];\n\nconst lightingPool = [\n  'soft window light from the left, gentle diffused shadows',\n  'harsh fluorescent overhead lighting, flat and clinical',\n  'warm golden hour rim light streaming through a window',\n  'cool blue monitor glow illuminating the subject\\'s face',\n  'overcast daylight through large windows, even and diffused',\n  'warm desk lamp light glowing in an otherwise dim room',\n  'bright midday sun casting hard-edged shadows',\n  'mixed lighting, warm tungsten desk lamp against cool window daylight',\n  'late afternoon light with long soft shadows across the desk',\n  'even studio-style softbox lighting, minimal shadow'\n];\n\nconst lensPool = [\n  '85mm portrait lens, shallow depth of field, softly blurred background',\n  '24mm wide-angle establishing shot, full environment visible',\n  'extreme macro close-up on hands and keyboard',\n  'high-angle bird\\'s eye view looking straight down at the desk',\n  '35mm environmental portrait, subject and context both in focus',\n  'low-angle shot looking up at the subject, dynamic perspective',\n  '50mm standard lens, natural perspective, medium shot',\n  'over-the-shoulder shot, screen and subject both visible',\n  '105mm compressed telephoto, tightly framed on subject',\n  'eye-level candid shot, mid-action, slightly off-center framing'\n];\n\nconst visualStyles = [\n  'moody low-key lighting, high contrast shadows, late-night office work, dramatic atmosphere',\n  'bright high-key photography, soft shadows, airy modern office, optimistic tone',\n  'over-the-shoulder perspective, HR staff reviewing a candidate profile on a laptop, immersive POV',\n  'macro detail shot, close-up of hands typing on keyboard with a resume database UI visible, tactile focus',\n  'wide-angle office scene, team meeting with whiteboard, dynamic composition, slight lens distortion',\n  'cyberpunk-inspired lighting, neon accents, futuristic recruitment platform interface, tech-forward vibe',\n  'soft pastel color palette, friendly and approachable brand tone, modern startup office',\n  'dramatic spotlight lighting, subject isolated against dark background, focus on decision-making moment',\n  'natural outdoor workspace, business owner working on laptop in cafe or patio, lifestyle-business blend',\n  'motion blur effect, busy office environment, sense of urgency and productivity',\n  'split lighting portrait, half-lit face of professional, symbolizes decision-making or analysis',\n  'top-down workspace chaos, scattered resumes, application forms, documents, organized mess storytelling',\n  'isometric 3D render style, stylized office environment, modern look',\n  'UI-focused mockup style, laptop screen dominant with a clean candidate-matching dashboard interface',\n  'glass reflection shot, subject seen through office glass panels, layered composition',\n  'golden hour backlighting, silhouette of entrepreneur using phone, aspirational mood',\n  'ultra-realistic 3D render, ray tracing, global illumination, highly detailed modern office environment',\n  'isometric low-poly city office, stylized buildings and workspace, soft gradients',\n  'Studio Ghibli-inspired illustration, soft painterly textures, warm lighting, whimsical office life',\n  'anime-style office scene, clean line art, vibrant colors, expressive characters working',\n  'Pixar-style 3D characters, expressive faces, colorful office environment, friendly tone',\n  'dreamlike surrealism, floating objects, distorted office space, imaginative storytelling',\n  'watercolor illustration, soft edges, flowing colors, calm and artistic workplace mood',\n  'oil painting style, rich textures, dramatic lighting, classical fine art business scene',\n  'sketchbook concept art, rough pencil lines, ideation phase, creative workflow feel',\n  'flat vector illustration, clean shapes, bold colors, modern SaaS marketing style',\n  '3D hologram projection scene, glowing data visualizations floating above desk',\n  'augmented reality interface view, digital overlays on real office environment',\n  'miniature diorama style, tiny office setup with realistic lighting, tilt-shift effect',\n  'kitbash 3D environment, complex modular office assets, cinematic detail',\n  'dark academia aesthetic, warm lamps, wooden desks, intellectual and moody workspace',\n  'clean Apple-style product render, minimal background, glossy device focus, premium feel',\n  'high-fashion editorial office scene, dramatic poses, luxury corporate aesthetic',\n  'metaverse virtual office, avatars collaborating in digital workspace, immersive environment'\n];\n\nconst colorMoods = [\n  'soft pastel gradient (pink, lavender, baby blue) for friendly modern startup vibe',\n  'charcoal gray and electric blue accents for high-tech and innovation feel',\n  'earth tones (brown, olive, beige) for grounded, reliable, and human-centered branding',\n  'black and gold luxury palette for premium, high-status positioning',\n  'cool gray and white with subtle blue accents for neutral corporate professionalism',\n  'sunset gradient (orange, magenta, purple) for creative and energetic campaigns',\n  'muted desaturated colors for calm, serious, and mature business tone',\n  'bright primary colors (red, blue, yellow) for bold, attention-grabbing visuals',\n  'aqua and turquoise palette for fresh, modern, and digital-first feel',\n  'cream and dark brown for warm, traditional, and trustworthy aesthetic',\n  'forest green and gold for stability, finance, and long-term growth messaging',\n  'sky blue and soft white for openness, clarity, and simplicity'\n];\n\nconst pick = arr => arr[Math.floor(Math.random() * arr.length)];\n\nconst cyclePos = staticData.formatCyclePos || 0;\nconst selectedFormat = formatCycle[cyclePos % formatCycle.length];\nconst topicHistory = staticData.topicHistory || [];\n\nconst today = new Date().toLocaleDateString('en-PH', {\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'\n});\n\nconst angle = parseUpdate.topicHint || pick(angles);\nconst tone = pick(tones);\nconst featureFocus = pick(featureGroups);\nconst subjectSeed = pick(subjectPool);\nconst environmentSeed = pick(environmentPool);\nconst lightingSeed = pick(lightingPool);\nconst lensSeed = pick(lensPool);\nconst visualStyle = pick(visualStyles);\nconst colorMood = pick(colorMoods);\nconst narrativePOV = pick(narrativePOVs);\nconst sensoryHook = pick(sensoryHooks);\nconst structureVariant = structureVariants[cyclePos % structureVariants.length];\nconst forbiddenPhrases = forbiddenPhraseSets[cyclePos % forbiddenPhraseSets.length];\nconst metaphorSeed = pick(metaphorSeeds);\n\nreturn [{\n  json: {\n    ...parseUpdate,\n    angle, formatType: selectedFormat.type, formatDesc: selectedFormat.desc,\n    tone, featureFocus, visualStyle, colorMood, topicHistory, today,\n    narrativePOV, sensoryHook, structureVariant, forbiddenPhrases, metaphorSeed,\n    subjectSeed, environmentSeed, lightingSeed, lensSeed\n  }\n}];\n"
+      },
+      "id": "8f886071-af76-4601-979a-14b58ea055b1",
+      "name": "Inject Randomness",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3001/api/v1/workspace/content-planner/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_ANYTHINGLLM_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": \"You are Mara, a sharp award-winning Filipino copywriter for Guest. You have strong opinions about what makes writing alive versus dead on the page.\\n\\n### THE TASK\\nWrite ONE Facebook post promoting Guest, an HR and staffing agency that recruits and places skilled Filipino talent with client companies.\\n\\n### STEP-BY-STEP EXECUTION\\n1. POV: {{ $json.narrativePOV }}\\n2. SENSORY HOOK: {{ $json.sensoryHook }}\\n3. STRUCTURE: {{ $json.structureVariant }}\\n4. FORMAT: {{ $json.formatType }} ({{ $json.formatDesc }})\\n5. PARAMETERS: Angle: {{ $json.angle }} | Feature: {{ $json.featureFocus }} | Tone: {{ $json.tone }} | Metaphor: {{ $json.metaphorSeed }}\\n6. FORBIDDEN: {{ $json.forbiddenPhrases.join(', ') }}, Are you tired of, Introducing, In todays fast-paced, Did you know, game-changer, seamless experience.\\n7. RECENT TOPICS TO AVOID: {{ $json.topicHistory.length > 0 ? $json.topicHistory.join(', ') : 'None' }}\\n8. LENGTH: 130 to 170 words. Exactly 10 hashtags (Include #Guest #GuestPH).\\n\\n### PRODUCT SPECS\\nEnd-to-end candidate sourcing, screening, and background verification. Fast placement, shorter time-to-hire. Flexible staffing for full-time, project-based, and seasonal roles. Onboarding and documentation support for new hires. Dedicated account management for client companies. Trusted by growing businesses across the Philippines.\\n\\n### OUTPUT REQUIREMENT (STRICT)\\nYou are a JSON-generating machine. Do not speak to me. Do not say 'Sure' or 'Here is the post.' Do not use markdown blocks (```json). Provide ONLY the raw JSON object.\\n\\nRequired Structure:\\n{\\n  \\\"topic\\\": \\\"one sentence summary\\\",\\n  \\\"caption\\\": \\\"the full post caption\\\",\\n  \\\"hashtags\\\": \\\"#tag1 #tag2 #tag3 #tag4 #tag5 #tag6 #tag7 #tag8 #tag9 #tag10\\\"\\n}\",\n  \"mode\": \"chat\",\n  \"sessionId\": \"guest-v5-content-{{ $json.chatId }}-{{ Date.now() }}\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "f365989d-a569-49f7-937b-3a4bd3a8c10d",
+      "name": "AnythingLLM – Generate Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const history = $input.first().json;\nconst promptId = $('Extract Prompt ID').first().json.promptId;\nconst promptData = history[promptId];\nif (!promptData) throw new Error('ComfyUI job not ready for: ' + promptId + '. Try increasing Wait time.');\nconst images = (promptData.outputs || {})['9']?.images || [];\nif (!images.length) throw new Error('No images in output node 9.');\nconst img = images[0];\nreturn [{ json: { filename: img.filename, subfolder: img.subfolder || '', imageType: img.type || 'output', promptId, chatId: $('Extract Prompt ID').first().json.chatId, topic: $('Extract Prompt ID').first().json.topic, caption: $('Extract Prompt ID').first().json.caption, hashtags: $('Extract Prompt ID').first().json.hashtags } }];"
+      },
+      "id": "6b6b077a-6044-4720-ab8e-0af7f29a2a07",
+      "name": "Extract Image Filename",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        2880
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8188/history/{{ $json.promptId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "2e21ca1a-23fe-4d3c-8d44-cd798558f60f",
+      "name": "Poll ComfyUI History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3584,
+        2880
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v5.8: The \"No-Fail\" Llama 3 JSON Parser\nconst response = $input.first().json;\n\n// 1. Extract raw text from the textResponse field\nlet rawText = (response.textResponse || response.text || \"\").trim();\n\n// 2. Safely get Chat ID\nconst parseUpdateNode = $(\"Parse Update\").first().json;\nconst chatId = parseUpdateNode.chatId;\n\nif (!rawText) throw new Error('Empty response from AnythingLLM');\n\n// 3. CRITICAL CLEANING: Standardize all whitespace variants\n// This removes non-breaking spaces and other invisible characters that cause indexOf/JSON.parse to fail\nrawText = rawText.replace(/[\\u00A0\\u1680​\\u180e\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f​\\u3000]/g, \" \");\n\n// 4. EXTRACTION: Find the JSON boundaries\n// We look for the first '{' and the last '}' to strip any Llama preamble or \"Note:\" footers\nconst startBrace = rawText.indexOf('{');\nconst endBrace = rawText.lastIndexOf('}');\n\nif (startBrace === -1 || endBrace === -1) {\n    throw new Error('No JSON found in LLM response.');\n}\n\nlet jsonString = rawText.substring(startBrace, endBrace + 1);\n\nlet parsed = null;\ntry {\n    // Attempt 1: Standard Parse\n    parsed = JSON.parse(jsonString);\n} catch (e) {\n    try {\n        // Attempt 2: Escape literal newlines within the string\n        // This fixes the \"Unexpected token\" error caused by real line breaks inside quotes\n        const escapedJson = jsonString.replace(/\\n/g, \"\\\\n\").replace(/\\r/g, \"\\\\r\");\n        parsed = JSON.parse(escapedJson);\n    } catch (err) {\n        // Attempt 3: Regex Fallback (The \"Indestructible\" Method)\n        // If the LLM mangles the quotes or adds commentary, we just grab the text between the keys\n        const extract = (key) => {\n            const regex = new RegExp(`\"${key}\"\\\\s*:\\\\s*\"(.*?)\"`, \"s\");\n            const match = jsonString.match(regex);\n            return match ? match[1] : \"\";\n        };\n\n        parsed = {\n            topic: extract(\"topic\"),\n            caption: extract(\"caption\"),\n            hashtags: extract(\"hashtags\")\n        };\n    }\n}\n\n// 5. DATA PREPARATION & CLEANUP\n// Remove any accidental literal \"\\n\" characters the LLM might have typed out\nconst cleanText = (str) => (str || \"\").replace(/\\\\n/g, \"\\n\").trim();\n\nconst topic = cleanText(parsed.topic || \"Guest Update\");\nconst fullCaption = cleanText(parsed.caption || \"\");\nconst hashtags = cleanText(parsed.hashtags || \"\");\n\n// 6. TELEGRAM SIZE GUARD (1024 chars for images with captions)\nconst overhead = topic.length + hashtags.length + 50; \nconst telegramLimit = 1024 - overhead;\n\nlet telegramCaption = fullCaption;\nif (fullCaption.length > telegramLimit) {\n    const tempCut = fullCaption.substring(0, telegramLimit);\n    const lastPeriod = tempCut.lastIndexOf('.');\n    telegramCaption = lastPeriod > 0 ? tempCut.substring(0, lastPeriod + 1) : tempCut + \"...\";\n}\n\nreturn [{\n    json: {\n        chatId: chatId,\n        topic: topic,\n        hashtags: hashtags,\n        tg_caption: telegramCaption,\n        full_caption: fullCaption,\n        caption: telegramCaption\n    }\n}];"
+      },
+      "id": "5efc4af7-7953-4252-8de5-c9160650eadc",
+      "name": "Parse Content Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3344,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3001/api/v1/workspace/content-planner/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_ANYTHINGLLM_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": \"You are a professional ComfyUI prompt engineer specializing in photorealistic editorial photography for Philippine social media brands.\\n\\nYour task: Write ONE image generation prompt for the Z Image Turbo diffusion model.\\n\\nBASE CONTENT\\nPost topic: {{ $json.topic }}\\nPost caption: {{ $json.caption }}\\n\\nCINEMATIC SPECIFICATIONS\\nVisual style: {{ $('Inject Randomness').first().json.visualStyle }}\\nColor mood: {{ $('Inject Randomness').first().json.colorMood }}\\n\\nMANDATORY RANDOMIZED SEEDS - you MUST build each layer directly from its seed below. Do not substitute a different subject, location, light source, or lens than the one given. You may add photographic detail and phrasing around the seed, but the seed itself is non-negotiable and must remain recognizable in your final prompt. Do NOT default back to a generic \\\"person typing on a laptop in an office\\\" scene - if the subject seed does not mention a laptop, screen, or typing, your prompt must not include one either:\\nSubject seed: {{ $('Inject Randomness').first().json.subjectSeed }}\\nEnvironment seed: {{ $('Inject Randomness').first().json.environmentSeed }}\\nLighting seed: {{ $('Inject Randomness').first().json.lightingSeed }}\\nLens/composition seed: {{ $('Inject Randomness').first().json.lensSeed }}\\n\\nYour prompt MUST address all four of these layers in this order, each one built from its seed above:\\n1. SUBJECT - expand the subject seed into a specific, vivid action and pose\\n2. ENVIRONMENT - expand the environment seed with specific visual details (materials, objects, background elements)\\n3. LIGHTING - expand the lighting seed with precise quality and direction\\n4. LENS AND COMPOSITION - expand the lens seed into full camera framing language\\n\\nHARD CONSTRAINTS - violating any of these will make the image unusable:\\n- Absolutely zero text, letters, numbers, words, logos, icons, signs, buttons, or UI labels visible anywhere in the image\\n- Authentic Filipino physical features and natural Filipino skin tones - not generic East Asian, not Western, not South Asian\\n- Photorealistic photography style only - not illustrated, not 3D rendered, not anime, not stock-photo generic\\n- 4K resolution quality, sharp focus on subject, professional depth of field control\\n- The scene must connect visually and thematically to the post topic above\\n\\nOUTPUT INSTRUCTION:\\nReturn ONLY the image prompt as plain text. Do not include labels, headers, explanations, JSON, or any text before or after the prompt. Do not write Note or Explanation or anything else. Begin immediately with the scene description and end when the scene description ends.\",\n  \"mode\": \"chat\",\n  \"sessionId\": \"guest-v5-img-{{ $json.chatId }}-{{ Date.now() }}\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "1f570d7c-0420-422b-aebf-1e6a518261b6",
+      "name": "AnythingLLM – Generate Image Prompt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3568,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8188/prompt",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.comfyBody }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "55b94fb1-a038-42d9-a407-8527d38e47d4",
+      "name": "Submit to ComfyUI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4224,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst promptId = response.prompt_id;\nif (!promptId) throw new Error('No prompt_id from ComfyUI: ' + JSON.stringify(response));\n\nreturn [{\n  json: {\n    promptId,\n    chatId: $('Build ComfyUI Payload').first().json.chatId,\n    topic: $('Build ComfyUI Payload').first().json.topic,\n    caption: $('Build ComfyUI Payload').first().json.caption,\n    hashtags: $('Build ComfyUI Payload').first().json.hashtags\n  }\n}];"
+      },
+      "id": "59eb01f8-d379-40f5-af0c-a63dbde2db6c",
+      "name": "Extract Prompt ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4448,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// v4 UPDATED: Build ComfyUI Payload\n// Changes from v3:\n//   1. 72:71 negative prompt is now fully populated (was empty)\n//   2. Positive prompt gets visual style modifier appended\n//   3. Resolution kept at 1024x1024 (optimal for Z Image Turbo)\n//   4. steps bumped to 12 (slightly better quality, still fast)\n// ============================================================\nconst { imagePrompt, visualStyle, chatId, topic, caption, hashtags } = $json;\nconst seed = Math.floor(Math.random() * 999999999999999);\n\n// Append the randomly selected visual style modifier from Inject Randomness\nconst enhancedPrompt = `${imagePrompt}, ${visualStyle}, 4K resolution, sharp focus, professional social media image, highly detailed`;\n\n// Comprehensive negative prompt — critical for Z Image Turbo quality\nconst negativePrompt = 'text, watermark, logo, brand name, numbers, letters, words, signs, banners, bad anatomy, extra fingers, mutated hands, poorly drawn face, distorted face, blurry, low quality, low resolution, oversaturated, washed out colors, generic stock photo aesthetic, duplicate, ugly, deformed, disfigured, out of frame, cropped, worst quality, jpeg artifacts';\n\nconst workflow = {\n  \"9\": {\n    \"inputs\": { \"filename_prefix\": \"guest-v4\", \"images\": [\"72:65\", 0] },\n    \"class_type\": \"SaveImage\",\n    \"_meta\": { \"title\": \"Save Image\" }\n  },\n  \"72:63\": {\n    \"inputs\": { \"clip_name\": \"qwen_3_4b.safetensors\", \"type\": \"lumina2\", \"device\": \"default\" },\n    \"class_type\": \"CLIPLoader\",\n    \"_meta\": { \"title\": \"Load CLIP\" }\n  },\n  \"72:64\": {\n    \"inputs\": { \"vae_name\": \"ae.safetensors\" },\n    \"class_type\": \"VAELoader\",\n    \"_meta\": { \"title\": \"Load VAE\" }\n  },\n  \"72:65\": {\n    \"inputs\": { \"samples\": [\"72:70\", 0], \"vae\": [\"72:64\", 0] },\n    \"class_type\": \"VAEDecode\",\n    \"_meta\": { \"title\": \"VAE Decode\" }\n  },\n  \"72:66\": {\n    \"inputs\": { \"unet_name\": \"z_image_turbo_bf16.safetensors\", \"weight_dtype\": \"default\" },\n    \"class_type\": \"UNETLoader\",\n    \"_meta\": { \"title\": \"Load Diffusion Model\" }\n  },\n  \"72:67\": {\n    \"inputs\": { \"text\": enhancedPrompt, \"clip\": [\"72:63\", 0] },\n    \"class_type\": \"CLIPTextEncode\",\n    \"_meta\": { \"title\": \"CLIP Text Encode (Positive Prompt)\" }\n  },\n  \"72:68\": {\n    \"inputs\": { \"width\": 1024, \"height\": 1024, \"batch_size\": 1 },\n    \"class_type\": \"EmptySD3LatentImage\",\n    \"_meta\": { \"title\": \"EmptySD3LatentImage\" }\n  },\n  \"72:69\": {\n    \"inputs\": { \"shift\": 3, \"model\": [\"72:66\", 0] },\n    \"class_type\": \"ModelSamplingAuraFlow\",\n    \"_meta\": { \"title\": \"ModelSamplingAuraFlow\" }\n  },\n  \"72:70\": {\n    \"inputs\": {\n      \"seed\": seed,\n      \"steps\": 12,\n      \"cfg\": 1,\n      \"sampler_name\": \"res_multistep\",\n      \"scheduler\": \"simple\",\n      \"denoise\": 1,\n      \"model\": [\"72:69\", 0],\n      \"positive\": [\"72:67\", 0],\n      \"negative\": [\"72:71\", 0],\n      \"latent_image\": [\"72:68\", 0]\n    },\n    \"class_type\": \"KSampler\",\n    \"_meta\": { \"title\": \"KSampler\" }\n  },\n  \"72:71\": {\n    \"inputs\": { \"text\": negativePrompt, \"clip\": [\"72:63\", 0] },\n    \"class_type\": \"CLIPTextEncode\",\n    \"_meta\": { \"title\": \"CLIP Text Encode (Negative Prompt)\" }\n  }\n};\n\nreturn [{\n  json: {\n    chatId,\n    topic,\n    caption,\n    hashtags,\n    imagePrompt: enhancedPrompt,\n    seed,\n    comfyBody: JSON.stringify({ prompt: workflow, client_id: 'n8n-guest-v4-' + chatId })\n  }\n}];"
+      },
+      "id": "79592efa-e194-4073-ade0-dc1ba5da9a61",
+      "name": "Build ComfyUI Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 150,
+        "unit": "seconds"
+      },
+      "id": "f7e7c853-9b93-46e2-96a8-8222026918de",
+      "name": "Wait 150s for Generation",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        2880
+      ],
+      "webhookId": "64bf0716-0727-4b45-86b1-6d4988dccc79"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/me/feed",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_FB_PAGE_ACCESS_TOKEN"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.message }}"
+            },
+            {
+              "name": "attached_media[0]",
+              "value": "={{ $json.attachedMedia }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "7b22b516-b478-46eb-b2a5-1cfc383eac67",
+      "name": "Facebook – Publish to Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4464,
+        3056
+      ],
+      "notesInFlow": true,
+      "notes": "Step 2 of 2: explicitly creates one standalone Post per photo via /feed + attached_media, so Facebook cannot silently fold this into a previous post."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the /feed request body ahead of time so the HTTP node\n// only needs simple $json.field lookups (avoids expression-parser\n// issues with bracket-notation param names + inline string building).\nconst fb = $input.first().json;\nconst session = $('Load Session').first().json;\n\nconst message = session.caption + '\\n\\n' + session.hashtags;\nconst attachedMedia = JSON.stringify({ media_fbid: fb.id });\n\nreturn [{\n  json: {\n    message,\n    attachedMedia\n  }\n}];"
+      },
+      "id": "241f92c0-01b4-48ae-a0f5-8e913a78ae85",
+      "name": "Build Feed Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        3056
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Update": {
+      "main": [
+        [
+          {
+            "node": "Is /generate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is /generate?": {
+      "main": [
+        [
+          {
+            "node": "Inject Randomness",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Callback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inject Randomness": {
+      "main": [
+        [
+          {
+            "node": "generating... reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "generating... reply": {
+      "main": [
+        [
+          {
+            "node": "AnythingLLM – Generate Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Callback?": {
+      "main": [
+        [
+          {
+            "node": "Parse Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "/generate reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AnythingLLM – Generate Content": {
+      "main": [
+        [
+          {
+            "node": "Parse Content Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Content Response": {
+      "main": [
+        [
+          {
+            "node": "AnythingLLM – Generate Image Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AnythingLLM – Generate Image Prompt": {
+      "main": [
+        [
+          {
+            "node": "Parse Image Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Image Prompt": {
+      "main": [
+        [
+          {
+            "node": "Build ComfyUI Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build ComfyUI Payload": {
+      "main": [
+        [
+          {
+            "node": "Submit to ComfyUI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit to ComfyUI": {
+      "main": [
+        [
+          {
+            "node": "Extract Prompt ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Prompt ID": {
+      "main": [
+        [
+          {
+            "node": "Wait 150s for Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll ComfyUI History": {
+      "main": [
+        [
+          {
+            "node": "Extract Image Filename",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Image Filename": {
+      "main": [
+        [
+          {
+            "node": "Download Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image": {
+      "main": [
+        [
+          {
+            "node": "Save Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Session": {
+      "main": [
+        [
+          {
+            "node": "Telegram – Send Photo + Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Callback": {
+      "main": [
+        [
+          {
+            "node": "Answer Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer Callback": {
+      "main": [
+        [
+          {
+            "node": "Is Approve?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Approve?": {
+      "main": [
+        [
+          {
+            "node": "Load Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram – Send Rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Session": {
+      "main": [
+        [
+          {
+            "node": "Re-download for Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-download for Facebook": {
+      "main": [
+        [
+          {
+            "node": "Facebook – Upload Photo (Unpublished)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract FB Post URL": {
+      "main": [
+        [
+          {
+            "node": "Telegram – Confirm Posted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 150s for Generation": {
+      "main": [
+        [
+          {
+            "node": "Poll ComfyUI History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Facebook – Upload Photo (Unpublished)": {
+      "main": [
+        [
+          {
+            "node": "Build Feed Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Facebook – Publish to Feed": {
+      "main": [
+        [
+          {
+            "node": "Extract FB Post URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Feed Payload": {
+      "main": [
+        [
+          {
+            "node": "Facebook – Publish to Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "9c9c070b-0257-4f3c-b933-fbab3162a1ce",
+  "meta": {
+    "instanceId": "a9923adedf64fe4116624030b14544458eb0aa8c05110597c54588b0b20299b2"
+  },
+  "id": "7RUXf0gScRZr1FqQ",
+  "tags": [
+    {
+      "updatedAt": "2026-05-07T00:53:23.566Z",
+      "createdAt": "2026-05-07T00:53:23.566Z",
+      "id": "NZTwnmwSnCnphFQW",
+      "name": "comfyui"
+    },
+    {
+      "updatedAt": "2026-05-06T13:33:15.266Z",
+      "createdAt": "2026-05-06T13:33:15.266Z",
+      "id": "kMcbnxGxhxOTJNF7",
+      "name": "ai-pipeline"
+    },
+    {
+      "updatedAt": "2026-06-28T22:07:16.336Z",
+      "createdAt": "2026-06-28T22:07:16.336Z",
+      "id": "oHgw2NcYro4SYO8l",
+      "name": "facebook"
+    },
+    {
+      "updatedAt": "2026-06-28T22:07:57.847Z",
+      "createdAt": "2026-06-28T22:07:57.847Z",
+      "id": "zXzMUKX3YaUWtfQE",
+      "name": "anythingllm"
+    }
+  ]
+}
